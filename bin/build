@@ -288,4 +288,26 @@ echo "${SIDECAR_REPO:-}" > "${layers_dir}/env/SIDECAR_REPO"
 echo "${SIDECAR_BRANCH}" > "${layers_dir}/env/SIDECAR_BRANCH"
 echo "${NODE_VERSION}" > "${layers_dir}/env/NODE_VERSION"
 
+# Create launch process for the main application
+echo "---> Configuring main application launch process"
+
+# Simple launch process using app.js as entry point
+cat > "${layers_dir}/launch.toml" << EOF
+[[processes]]
+type = "web"
+command = ["node", "app.js"]
+args = []
+default = true
+
+[[processes]]
+type = "sidecar"
+command = ["${sidecar_layer_dir}/sidecar-loader.sh"]
+args = []
+default = false
+EOF
+
+echo "Launch processes configured:"
+echo "  - web (default): node app.js"
+echo "  - sidecar: Sidecar containers"
+
 echo "---> Sidecar Loader Buildpack completed successfully"

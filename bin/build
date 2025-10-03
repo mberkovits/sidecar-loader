@@ -1,0 +1,291 @@
+#!/usr/bin/env bash
+
+set -eo pipefail
+
+# Parse arguments
+layers_dir="$1"
+platform_dir="$2"
+plan_path="$3"
+
+echo "---> Sidecar Loader Buildpack"
+
+# Create a layer for GitHub CLI
+gh_layer_dir="${layers_dir}/gh-cli"
+mkdir -p "${gh_layer_dir}/bin"
+
+# Create layer metadata for GitHub CLI
+cat > "${gh_layer_dir}.toml" << EOF
+[types]
+launch = false
+cache = true
+build = true
+EOF
+
+echo "---> Installing GitHub CLI"
+
+# Download and install GitHub CLI
+GH_VERSION="2.40.1"
+GH_ARCH="linux_amd64"
+if [[ "$(uname -m)" == "aarch64" ]]; then
+    GH_ARCH="linux_arm64"
+fi
+
+GH_URL="https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_${GH_ARCH}.tar.gz"
+
+echo "Downloading GitHub CLI from ${GH_URL}"
+curl -L "${GH_URL}" | tar -xz -C "${gh_layer_dir}" --strip-components=1
+
+# Make gh executable
+chmod +x "${gh_layer_dir}/bin/gh"
+
+# Add GitHub CLI to PATH for build process
+export PATH="${gh_layer_dir}/bin:${PATH}"
+
+# Create a layer for Node.js
+node_layer_dir="${layers_dir}/nodejs"
+mkdir -p "${node_layer_dir}/bin"
+
+# Create layer metadata for Node.js
+cat > "${node_layer_dir}.toml" << EOF
+[types]
+launch = true
+cache = true
+build = true
+EOF
+
+echo "---> Installing Node.js"
+
+# Download and install Node.js
+NODE_VERSION="20.10.0"
+NODE_ARCH="linux-x64"
+if [[ "$(uname -m)" == "aarch64" ]]; then
+    NODE_ARCH="linux-arm64"
+fi
+
+NODE_URL="https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-${NODE_ARCH}.tar.xz"
+
+echo "Downloading Node.js from ${NODE_URL}"
+curl -L "${NODE_URL}" | tar -xJ -C "${node_layer_dir}" --strip-components=1
+
+# Make node and npm executable
+chmod +x "${node_layer_dir}/bin/node"
+chmod +x "${node_layer_dir}/bin/npm"
+
+# Add Node.js to PATH for build and runtime
+export PATH="${node_layer_dir}/bin:${PATH}"
+
+# Create a layer for sidecar configuration
+sidecar_layer_dir="${layers_dir}/sidecar"
+mkdir -p "${sidecar_layer_dir}"
+
+# Create layer metadata
+cat > "${sidecar_layer_dir}.toml" << EOF
+[types]
+launch = true
+cache = false
+build = false
+EOF
+
+echo "---> Setting up sidecar configuration"
+
+# Handle GitHub authentication
+echo "---> Configuring GitHub authentication"
+
+# Check for GitHub token in environment or platform directory
+GITHUB_TOKEN=""
+if [[ -n "${GITHUB_TOKEN_ENV}" ]]; then
+    GITHUB_TOKEN="${GITHUB_TOKEN_ENV}"
+    echo "Using GitHub token from GITHUB_TOKEN_ENV environment variable"
+elif [[ -f "${platform_dir}/env/GITHUB_TOKEN" ]]; then
+    GITHUB_TOKEN=$(cat "${platform_dir}/env/GITHUB_TOKEN")
+    echo "Using GitHub token from platform environment"
+elif [[ -f "${platform_dir}/bindings/github/token" ]]; then
+    GITHUB_TOKEN=$(cat "${platform_dir}/bindings/github/token")
+    echo "Using GitHub token from platform binding"
+else
+    echo "WARNING: No GitHub token found. Private repository access may fail."
+    echo "Set GITHUB_TOKEN_ENV environment variable or provide token via platform bindings."
+fi
+
+# Authenticate with GitHub CLI if token is available
+if [[ -n "${GITHUB_TOKEN}" ]]; then
+    echo "${GITHUB_TOKEN}" | gh auth login --with-token
+    echo "Successfully authenticated with GitHub CLI"
+fi
+
+# Get sidecar repository configuration from build-time environment variables
+SIDECAR_REPO="${BP_SIDECAR_REPO:-}"
+SIDECAR_BRANCH="${BP_SIDECAR_BRANCH:-main}"
+SIDECAR_PATH="${BP_SIDECAR_PATH:-.}"
+
+echo "---> Reading sidecar configuration from build-time environment variables"
+echo "Repository: ${SIDECAR_REPO:-<not set>}"
+echo "Branch: ${SIDECAR_BRANCH}"
+echo "Path: ${SIDECAR_PATH}"
+
+# Copy sidecar configuration files if they exist (for application use, not buildpack config)
+if [[ -f "sidecar.yml" ]]; then
+    cp "sidecar.yml" "${sidecar_layer_dir}/"
+    echo "Copied sidecar.yml to layer"
+elif [[ -f "sidecar.yaml" ]]; then
+    cp "sidecar.yaml" "${sidecar_layer_dir}/"
+    echo "Copied sidecar.yaml to layer"
+fi
+
+# Clone sidecar repository if specified
+if [[ -n "${SIDECAR_REPO}" ]]; then
+    echo "---> Cloning sidecar repository: ${SIDECAR_REPO}"
+    
+    sidecar_src_dir="${sidecar_layer_dir}/src"
+    mkdir -p "${sidecar_src_dir}"
+    
+    # Clone the repository
+    if gh repo clone "${SIDECAR_REPO}" "${sidecar_src_dir}" -- --branch="${SIDECAR_BRANCH}" --depth=1; then
+        echo "Successfully cloned sidecar repository"
+        
+        # Copy specified path to sidecar directory
+        if [[ "${SIDECAR_PATH}" != "." ]]; then
+            if [[ -d "${sidecar_src_dir}/${SIDECAR_PATH}" ]]; then
+                cp -r "${sidecar_src_dir}/${SIDECAR_PATH}"/* "${sidecar_layer_dir}/"
+                echo "Copied sidecar files from ${SIDECAR_PATH}"
+            else
+                echo "ERROR: Specified path ${SIDECAR_PATH} not found in repository"
+                exit 1
+            fi
+        else
+            # Copy all files except .git
+            find "${sidecar_src_dir}" -mindepth 1 -maxdepth 1 -not -name '.git' -exec cp -r {} "${sidecar_layer_dir}/" \;
+            echo "Copied all sidecar files from repository root"
+        fi
+        
+        # Install Node.js dependencies if package.json exists
+        if [[ -f "${sidecar_layer_dir}/package.json" ]]; then
+            echo "---> Installing Node.js dependencies for sidecar"
+            cd "${sidecar_layer_dir}"
+            
+            # Use npm ci if package-lock.json exists, otherwise npm install
+            if [[ -f "package-lock.json" ]]; then
+                npm ci --production
+                echo "Installed dependencies using npm ci"
+            else
+                npm install --production
+                echo "Installed dependencies using npm install"
+            fi
+            
+            # Return to original directory
+            cd - > /dev/null
+        else
+            echo "No package.json found, skipping Node.js dependency installation"
+        fi
+        
+        # Clean up source directory
+        rm -rf "${sidecar_src_dir}"
+    else
+        echo "ERROR: Failed to clone sidecar repository ${SIDECAR_REPO}"
+        exit 1
+    fi
+else
+    echo "No sidecar repository specified in configuration"
+fi
+
+# Create a simple sidecar loader script
+cat > "${sidecar_layer_dir}/sidecar-loader.sh" << 'EOF'
+#!/usr/bin/env bash
+
+echo "Sidecar Loader: Initializing sidecar containers..."
+
+# This is where you would implement the logic to:
+# 1. Parse sidecar configuration
+# 2. Start sidecar containers
+# 3. Set up networking/communication
+# 4. Handle lifecycle management
+
+SIDECAR_DIR="/layers/sidecar"
+NODE_DIR="/layers/nodejs"
+
+# Add Node.js to PATH if available
+if [[ -d "${NODE_DIR}/bin" ]]; then
+    export PATH="${NODE_DIR}/bin:${PATH}"
+    echo "Node.js available at: $(which node)"
+    echo "Node.js version: $(node --version)"
+    echo "npm version: $(npm --version)"
+fi
+
+if [[ -f "${SIDECAR_DIR}/sidecar.yml" ]] || [[ -f "${SIDECAR_DIR}/sidecar.yaml" ]]; then
+    echo "Sidecar configuration found, processing..."
+    
+    # Check if sidecar code was downloaded from repository
+    if [[ -d "${SIDECAR_DIR}" ]] && [[ "$(ls -A ${SIDECAR_DIR} 2>/dev/null | grep -v sidecar-loader.sh | grep -v sidecar.y)" ]]; then
+        echo "Sidecar code found in layer directory"
+        
+        # Change to sidecar directory
+        cd "${SIDECAR_DIR}"
+        
+        # Make any executable files in the sidecar directory executable
+        find "${SIDECAR_DIR}" -type f -name "*.sh" -exec chmod +x {} \;
+        find "${SIDECAR_DIR}" -type f -name "start*" -exec chmod +x {} \;
+        find "${SIDECAR_DIR}" -type f -name "run*" -exec chmod +x {} \;
+        
+        # Look for and execute sidecar startup script
+        if [[ -f "start.sh" ]]; then
+            echo "Executing sidecar startup script..."
+            ./start.sh
+        elif [[ -f "run.sh" ]]; then
+            echo "Executing sidecar run script..."
+            ./run.sh
+        elif [[ -f "package.json" ]]; then
+            echo "Node.js application detected, checking for startup scripts..."
+            
+            # Check for npm start script
+            if npm run-script --silent 2>/dev/null | grep -q "start"; then
+                echo "Starting Node.js sidecar with 'npm start'..."
+                npm start
+            # Check for main entry point in package.json
+            elif [[ -f "$(node -pe "require('./package.json').main || 'index.js'")" ]]; then
+                MAIN_FILE=$(node -pe "require('./package.json').main || 'index.js'")
+                echo "Starting Node.js sidecar with main file: ${MAIN_FILE}"
+                node "${MAIN_FILE}"
+            # Default to index.js
+            elif [[ -f "index.js" ]]; then
+                echo "Starting Node.js sidecar with index.js..."
+                node index.js
+            # Try server.js as fallback
+            elif [[ -f "server.js" ]]; then
+                echo "Starting Node.js sidecar with server.js..."
+                node server.js
+            # Try app.js as fallback
+            elif [[ -f "app.js" ]]; then
+                echo "Starting Node.js sidecar with app.js..."
+                node app.js
+            else
+                echo "ERROR: No startup method found for Node.js sidecar"
+                echo "Available files:"
+                ls -la
+                exit 1
+            fi
+        else
+            echo "No standard startup script found (start.sh, run.sh, or package.json)"
+            echo "Available files in sidecar directory:"
+            ls -la "${SIDECAR_DIR}"
+        fi
+    else
+        echo "No sidecar code found - only configuration files present"
+    fi
+else
+    echo "No sidecar configuration found"
+fi
+
+echo "Sidecar Loader: Initialization complete"
+EOF
+
+chmod +x "${sidecar_layer_dir}/sidecar-loader.sh"
+
+# Set environment variables for the application
+mkdir -p "${layers_dir}/env"
+echo "${sidecar_layer_dir}" > "${layers_dir}/env/SIDECAR_LOADER_PATH"
+echo "${sidecar_layer_dir}:${node_layer_dir}/bin:${gh_layer_dir}/bin" > "${layers_dir}/env/PATH.append"
+echo "${SIDECAR_REPO:-}" > "${layers_dir}/env/SIDECAR_REPO"
+echo "${SIDECAR_BRANCH}" > "${layers_dir}/env/SIDECAR_BRANCH"
+echo "${NODE_VERSION}" > "${layers_dir}/env/NODE_VERSION"
+
+echo "---> Sidecar Loader Buildpack completed successfully"

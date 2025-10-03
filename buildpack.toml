@@ -1,0 +1,19 @@
+api = "0.10"
+
+[buildpack]
+  id = "mberkovits/sidecar-loader"
+  name = "Sidecar Loader Buildpack"
+  version = "0.1.0"
+  description = "A buildpack for loading sidecar containers"
+  homepage = "https://github.com/mberkovits/sidecar-loader"
+
+[[buildpack.licenses]]
+  type = "Apache-2.0"
+  uri = "https://github.com/mberkovits/sidecar-loader/blob/main/LICENSE"
+
+[metadata]
+  include-files = ["bin/build", "bin/detect", "buildpack.toml"]
+
+[[targets]]
+  os = "linux"
+  arch = "arm64"

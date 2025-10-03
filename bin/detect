@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+
+set -eo pipefail
+
+# The detect script determines if this buildpack should be used for the application
+# It should exit with code 0 if the buildpack should be applied, or non-zero otherwise
+
+# Check for sidecar repository configuration in build-time environment variables
+if [[ -n "$BP_SIDECAR_REPO" ]]; then
+    echo "Sidecar repository configured via BP_SIDECAR_REPO"
+    exit 0
+fi
+
+# Check for a sidecar configuration file or specific marker
+if [[ -f "sidecar.yml" ]] || [[ -f "sidecar.yaml" ]] || [[ -f ".sidecar" ]]; then
+    echo "Sidecar configuration file detected"
+    exit 0
+fi
+
+# Check for environment variable indicating sidecar usage
+if [[ -n "$ENABLE_SIDECAR" ]]; then
+    echo "Sidecar enabled via ENABLE_SIDECAR environment variable"
+    exit 0
+fi
+
+# If no sidecar indicators found, this buildpack should not be used
+exit 1

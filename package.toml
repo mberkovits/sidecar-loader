@@ -1,0 +1,6 @@
+[buildpack]
+uri = "."
+
+[[dependencies]]
+uri = "."
+

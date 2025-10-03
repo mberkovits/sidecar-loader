@@ -1,0 +1,45 @@
+# Example sidecar configuration file for runtime use
+# This file is optional and will be copied to the sidecar layer if present
+# Repository configuration now comes from build-time environment variables:
+#   BP_SIDECAR_REPO="your-org/your-private-sidecar-repo"
+#   BP_SIDECAR_BRANCH="main" (optional)
+#   BP_SIDECAR_PATH="." (optional)
+
+# Application-specific sidecar configuration
+sidecar:
+  name: "my-sidecar"
+  version: "1.0.0"
+  
+  # Environment variables to set for the sidecar at runtime
+  environment:
+    SIDECAR_MODE: "production"
+    LOG_LEVEL: "info"
+    API_ENDPOINT: "https://api.example.com"
+  
+  # Ports that the sidecar will use
+  ports:
+    - 8080
+    - 9090
+  
+  # Health check configuration
+  health_check:
+    endpoint: "/health"
+    interval: 30
+    timeout: 5
+  
+  # Resource limits
+  resources:
+    memory: "256Mi"
+    cpu: "100m"
+  
+  # Custom startup command (if different from start.sh or run.sh)
+  # command: "./custom-startup.sh"
+  
+  # Additional configuration specific to your sidecar
+  monitoring:
+    enabled: true
+    metrics_port: 9090
+    
+  logging:
+    level: "info"
+    format: "json"

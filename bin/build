@@ -295,7 +295,7 @@ echo "---> Configuring main application launch process"
 cat > "${layers_dir}/launch.toml" << EOF
 [[processes]]
 type = "web"
-command = ["node", "app.js"]
+command = ["node", "${sidecar_layer_dir}/app.js"]
 args = []
 default = true
 

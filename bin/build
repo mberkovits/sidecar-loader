@@ -294,12 +294,6 @@ echo "---> Configuring main application launch process"
 # Simple launch process using app.js as entry point
 cat > "${layers_dir}/launch.toml" << EOF
 [[processes]]
-type = "web"
-command = ["node", "${sidecar_layer_dir}/app.js"]
-args = []
-default = true
-
-[[processes]]
 type = "sidecar"
 command = ["${sidecar_layer_dir}/sidecar-loader.sh"]
 args = []
@@ -307,7 +301,6 @@ default = false
 EOF
 
 echo "Launch processes configured:"
-echo "  - web (default): node app.js"
 echo "  - sidecar: Sidecar containers"
 
 echo "---> Sidecar Loader Buildpack completed successfully"
